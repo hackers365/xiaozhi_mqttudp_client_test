@@ -18,6 +18,7 @@ import (
 var sendAudioEndTs int64
 var firstTts bool
 var firstAudio bool
+var opusData [][]byte
 
 // ServerMessage 表示服务器消息
 type ServerMessage struct {
@@ -62,29 +63,63 @@ type UDPConfig struct {
 var globalChannel chan *UDPConfig
 var serverConfig *ServerResponse
 
-func test_aes_encrypt() {
+func test_aes_encrypt(plainText string) []byte {
+	md5Data := md5.Sum([]byte(plainText))
+	md5Str := hex.EncodeToString(md5Data[:])
+	fmt.Println("加密前 md5Str:", md5Str)
+
 	// 32字节的密钥 (256位)
 	key, _ := hex.DecodeString("7f99ed0bf6647d38666628c322bc6a49")
 	// 16字节的IV (128位)
 	iv, _ := hex.DecodeString("010000003c2075c40000000000000000")
-	data := "1234567890123456"
 
 	//md5 iv
 	ivMd5 := md5.Sum(iv)
 	ivMd5Str := hex.EncodeToString(ivMd5[:])
 	fmt.Println("ivMd5Str:", ivMd5Str)
 
-	encryptedData, err := AesCTREncrypt(key, iv, []byte(data))
+	encryptedData, err := AesCTREncrypt(key, iv, []byte(plainText))
 	if err != nil {
 		fmt.Println("加密失败:", err)
-		return
+		return nil
 	}
 
 	//计算md5
-	md5Data := md5.Sum(encryptedData)
+	md5Data = md5.Sum(encryptedData)
 
-	fmt.Println("加密后的数据:", encryptedData)
-	fmt.Println("md5:", hex.EncodeToString(md5Data[:]))
+	fmt.Println("加密后的md5:", hex.EncodeToString(md5Data[:]))
+	return encryptedData
+}
+
+func test_aes_decrypt(data []byte) []byte {
+	md5Data := md5.Sum(data)
+	md5Str := hex.EncodeToString(md5Data[:])
+	fmt.Println("解密前 md5Str:", md5Str)
+
+	// 32字节的密钥 (256位)
+	key, _ := hex.DecodeString("7f99ed0bf6647d38666628c322bc6a49")
+	// 16字节的IV (128位)
+	iv, _ := hex.DecodeString("010000003c2075c40000000000000000")
+
+	decryptedData, err := AesCTRDecrypt(key, iv, data)
+	if err != nil {
+		fmt.Println("加密失败:", err)
+		return nil
+	}
+
+	//计算md5
+	md5Data = md5.Sum(decryptedData)
+
+	fmt.Println("解密后 md5:", hex.EncodeToString(md5Data[:]))
+	return decryptedData
+}
+
+func main1() {
+	plainText := "12345"
+	fmt.Println("加密前数据:", plainText)
+	enc_data := test_aes_encrypt(plainText)
+	dec_data := test_aes_decrypt(enc_data)
+	fmt.Println("解密后的数据:", string(dec_data))
 }
 
 func main() {
@@ -315,6 +350,15 @@ func handleTTS(client mqtt.Client, msg mqtt.Message) {
 			firstTts = true
 		}
 	}
+
+	if ttsState.State == "stop" {
+		pcmDataList, err := OpusToWav(opusData, 24000, 1, "output_24000.wav")
+		if err != nil {
+			fmt.Println("转换WAV文件失败:", err)
+			return
+		}
+		fmt.Printf("TTS 结束, 音频数据长度: %d\n", len(pcmDataList))
+	}
 }
 
 func handleGoodbye(client mqtt.Client, msg mqtt.Message) {
@@ -329,8 +373,18 @@ func connectUdqAndSendAudio(udpConfig *UDPConfig, mqttClient mqtt.Client) error 
 		return err
 	}
 
-	udpInstance.ReceiveAudioData(func(audioData []byte) {
-		fmt.Println("收到音频数据", len(audioData))
+	hexKey, _ := hex.DecodeString(udpConfig.UDP.Key)
+
+	opusData = make([][]byte, 0)
+
+	udpInstance.ReceiveAudioData(hexKey, func(key []byte, audioData []byte) {
+		decryptedData, err := udpInstance.decryptAudioData(key, audioData)
+		if err != nil {
+			fmt.Println("解密失败:", err)
+			return
+		}
+		opusData = append(opusData, decryptedData)
+		//fmt.Println("收到音频数据", len(decryptedData))
 	})
 
 	sessionId := "b23a56y8" //29f15278

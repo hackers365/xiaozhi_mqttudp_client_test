@@ -55,6 +55,18 @@ func AesCTREncrypt(key, nonce, plaintext []byte) ([]byte, error) {
 	return ciphertext, nil
 }
 
+func AesCTRDecrypt(key, nonce, ciphertext []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cipher: %v", err)
+	}
+
+	stream := cipher.NewCTR(block, nonce)
+	plaintext := make([]byte, len(ciphertext))
+	stream.XORKeyStream(plaintext, ciphertext)
+	return plaintext, nil
+}
+
 func (c *UDPClient) aesCTREncrypt(key, nonce, plaintext []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -65,6 +77,32 @@ func (c *UDPClient) aesCTREncrypt(key, nonce, plaintext []byte) ([]byte, error) 
 	ciphertext := make([]byte, len(plaintext))
 	stream.XORKeyStream(ciphertext, plaintext)
 	return ciphertext, nil
+}
+
+func (c *UDPClient) aesCTRDecrypt(key, nonce, ciphertext []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cipher: %v", err)
+	}
+
+	stream := cipher.NewCTR(block, nonce)
+	plaintext := make([]byte, len(ciphertext))
+	stream.XORKeyStream(plaintext, ciphertext)
+	return plaintext, nil
+}
+
+func (c *UDPClient) decryptAudioData(key []byte, data []byte) ([]byte, error) {
+	//分离nonce和密文
+	nonce := data[:16]
+	ciphertext := data[16:]
+
+	//解密
+	decryptedData, err := c.aesCTRDecrypt(key, nonce, ciphertext)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt data: %v", err)
+	}
+
+	return decryptedData, nil
 }
 
 func (c *UDPClient) SendAudioData(audioData []byte) error {
@@ -114,21 +152,23 @@ func (c *UDPClient) SendAudioData(audioData []byte) error {
 	return nil
 }
 
-func (c *UDPClient) ReceiveAudioData(cb func([]byte)) error {
+func (c *UDPClient) ReceiveAudioData(key []byte, cb func(key []byte, data []byte)) error {
 	go func() {
-		buffer := make([]byte, 1024)
-		n, _, err := c.udpConn.ReadFromUDP(buffer)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
+		for {
+			buffer := make([]byte, 1024)
+			n, _, err := c.udpConn.ReadFromUDP(buffer)
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
 
-		if !firstAudio {
-			firstAudio = true
-			fmt.Printf("收到第一条音频消息, 耗时: %d ms\n", time.Now().UnixMilli()-sendAudioEndTs)
-		}
+			if !firstAudio {
+				firstAudio = true
+				fmt.Printf("收到第一条音频消息, 耗时: %d ms\n", time.Now().UnixMilli()-sendAudioEndTs)
+			}
 
-		cb(buffer[:n])
+			cb(key, buffer[:n])
+		}
 	}()
 
 	return nil

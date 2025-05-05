@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/go-audio/audio"
 	"github.com/go-audio/wav"
@@ -92,4 +93,56 @@ func WavToOpus(wavData []byte, sampleRate int, channels int, bitRate int) ([][]b
 	}
 
 	return opusFrames, nil
+}
+
+func OpusToWav(opusData [][]byte, sampleRate int, channels int, fileName string) ([][]int16, error) {
+	opusDecoder, err := opus.NewDecoder(sampleRate, channels)
+	if err != nil {
+		return nil, fmt.Errorf("创建Opus解码器失败: %v", err)
+	}
+
+	wavOut, err := os.Create(fileName)
+	if err != nil {
+		return nil, fmt.Errorf("创建WAV文件失败: %v", err)
+	}
+
+	pcmDataList := make([][]int16, 0)
+	pcmBuffer := make([]int16, 4096)
+
+	wavEncoder := wav.NewEncoder(wavOut, sampleRate, 16, channels, 1)
+	wavBuffer := audio.IntBuffer{
+		Format: &audio.Format{
+			NumChannels: channels, // 使用传入的通道数
+			SampleRate:  sampleRate,
+		},
+		SourceBitDepth: 16,
+		Data:           make([]int, 4096),
+	}
+
+	for _, frame := range opusData {
+		n, err := opusDecoder.Decode(frame, pcmBuffer)
+		if err != nil {
+			return nil, fmt.Errorf("解码失败: %v", err)
+		}
+		copyData := make([]int16, len(pcmBuffer[:n]))
+		copy(copyData, pcmBuffer[:n])
+		pcmDataList = append(pcmDataList, copyData)
+
+		fmt.Println("pcmData len: ", len(copyData))
+
+		// 将PCM数据转换为int格式
+		for i := 0; i < len(copyData); i++ {
+			wavBuffer.Data = append(wavBuffer.Data, int(copyData[i]))
+		}
+	}
+
+	// 写入WAV文件
+	err = wavEncoder.Write(&wavBuffer)
+	if err != nil {
+		return nil, fmt.Errorf("写入WAV文件失败: %v", err)
+	}
+
+	wavEncoder.Close()
+
+	return pcmDataList, nil
 }
